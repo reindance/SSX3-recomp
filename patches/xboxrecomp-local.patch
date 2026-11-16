@@ -8849,10 +8849,10 @@ index 08bae4b..b52ae02 100644
  #endif
 diff --git a/src/video/fb_present_sdl.c b/src/video/fb_present_sdl.c
 new file mode 100644
-index 0000000..8871403
+index 0000000..9dcf2ed
 --- /dev/null
 +++ b/src/video/fb_present_sdl.c
-@@ -0,0 +1,497 @@
+@@ -0,0 +1,498 @@
 +/**
 + * POSIX counterpart of fb_present.c: show the guest framebuffer in an SDL2
 + * window. Same contract (RECOMP_FB_WINDOW, flip-time copy, BMP dump, snap
@@ -8873,6 +8873,7 @@ index 0000000..8871403
 +#include <unistd.h>
 +
 +extern ptrdiff_t xbox_GetMemoryOffset(void);
++void xbox_FramebufferSnapshot(const char *path);           /* below; video_player.h */
 +
 +static volatile int  s_fb_running;
 +static uint32_t      s_fb_va, s_fb_pitch, s_fb_width = 640, s_fb_height = 480;
