@@ -157,6 +157,14 @@ elseif(EMSCRIPTEN)
             ${CMAKE_CURRENT_SOURCE_DIR}/web/gpu.js
             ${CMAKE_CURRENT_SOURCE_DIR}/web/xbox.wgsl
             $<TARGET_FILE_DIR:${PROJECT_NAME}>)
+elseif(NINTENDO_SWITCH)
+    # Homebrew NRO for hbmenu (docs/SWITCH.md). The guest arena, heap budget
+    # and SD card layout are in src/switch/. Contains SSX 3's own code: for
+    # your own console only, never to be shared.
+    target_sources(${PROJECT_NAME} PRIVATE src/switch/heap_budget.c src/switch/switch_main.c)
+    target_link_libraries(${PROJECT_NAME} PRIVATE m)
+    nx_generate_nacp(OUTPUT ssx3_recomp.nacp NAME "SSX 3 recomp" AUTHOR "ssx3-recomp" VERSION "0.1.0")
+    nx_create_nro(${PROJECT_NAME} NACP ssx3_recomp.nacp)
 else()
     target_link_libraries(${PROJECT_NAME} PRIVATE m pthread dl)
     # Symbol names (sub_XXXXXXXX) in the crash handler's backtrace.
@@ -165,7 +173,9 @@ endif()
 
 # Vulkan renderer for the NV2A executor (RECOMP_GPU=vk), see docs/VULKAN.html.
 # Both hosts; on Windows it needs the Vulkan SDK (tools\build.bat finds it).
-if(EMSCRIPTEN)
+if(EMSCRIPTEN OR NINTENDO_SWITCH)
+    # Neither has Vulkan; the Switch renderer (deko3d) is still to come, so it
+    # draws with the toolkit's software rasteriser for now.
     set(SSX3_VULKAN_DEFAULT OFF)
 else()
     set(SSX3_VULKAN_DEFAULT ON)
@@ -186,6 +196,9 @@ elseif(SSX3_VULKAN)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vk ${XBOXRECOMP_DIR}/src/kernel)
     target_link_libraries(${PROJECT_NAME} PRIVATE vkr)
     target_compile_definitions(${PROJECT_NAME} PRIVATE SSX3_VULKAN=1)
+else()
+    # software rasteriser only: stubs for the renderer's live settings
+    target_sources(${PROJECT_NAME} PRIVATE src/no_renderer.c)
 endif()
 
 # MSVC-specific: large address aware, increase section limit for big generated files

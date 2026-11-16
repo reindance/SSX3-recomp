@@ -5,6 +5,45 @@ full-memory title mode), built from your own PAL rip like every other build.
 No game code or data in git; the NRO contains SSX 3's recompiled code and is
 for private use only (as the web build).
 
+## Status (16 Nov 2026)
+
+`scripts/build-switch.sh` builds `build-switch/ssx3_recomp.nro` (devkitA64 in
+the pinned container). In Ryujinx (patched for `svcCreateSharedMemory`, from
+the SSX Tricky work) it boots through the intro to the title screen ("Press
+START"), drawn by the toolkit's software rasteriser -- about 0.5 FPS in the
+emulator, which says nothing about hardware speed. Not yet run on hardware.
+
+What the build does differently (toolkit patch + `src/switch/`):
+
+- **Guest memory**: the native 1:1 layout, with every mapping a kernel
+  shared-memory object (`platform/switch_memory.inc`): a 4 GB arena in the
+  ASLR region, the 28 RAM mirrors, the contiguous window and its tiled alias,
+  the device apertures. `src/switch/heap_budget.c` keeps newlib's heap at
+  512 MB so the shared memory has quota.
+- **Device registers**: checked on every guest access as on the web build
+  (`XBOX_CHECKED_MMIO`), since a fault cannot be resumed; no page protection.
+- **Files**: game files in `sdmc:/switch/ssx3/game`, directory handles without
+  descriptors (libnx cannot `open()` a directory), SD card volume sizes.
+- **Start-up/exit** (`src/switch/switch_main.c`): log to `ssx3.log` on the SD
+  card, `env.txt` for `RECOMP_*` settings, the game on a 32 MB-stack thread,
+  4 MB minimum for every thread, `svcExitProcess` on exit.
+
+On the SD card:
+
+```
+/switch/ssx3/ssx3_recomp.nro
+/switch/ssx3/game/default.xbe, data/     your rip
+/switch/ssx3/env.txt                      optional, RECOMP_*=value lines
+```
+
+Start from hbmenu in title mode (hold R while starting a game).
+
+Next: run on hardware (memory layout, input, audio, speed of the CPU side
+with `RECOMP_GPU=sw`), then the deko3d backend. Known gaps: the emulated hard
+disk's partition images are created at full size (~4.8 GB; sparse files do
+not exist on the SD card's FAT/exFAT), and phantom controller slots (SDL
+reports 4 pads in the emulator; Tricky filters them by Npad style).
+
 ## What already carries over
 
 - **arm64.** The Asahi build already compiles the lifted C and toolkit for

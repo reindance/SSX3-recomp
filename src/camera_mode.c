@@ -226,7 +226,7 @@ static int terrain_hit(uint32_t world, const float a[3], const float b[3], int u
     wrf(pa + 12, 1.0f); wrf(pb + 12, 1.0f);
     wrf(box + 12, 1.0f); wrf(box + 0x1C, 1.0f);
 
-    memset((void *)&MEM8(tw), 0, 0xA20);
+    memset((void *)XBOX_PTR(tw), 0, 0xA20);
     ST32(tw, MEM32(world));
     g_esp = base;
     PUSH32(g_esp, box);

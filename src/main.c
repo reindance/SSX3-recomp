@@ -530,9 +530,9 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
 
     return EXCEPTION_CONTINUE_SEARCH;
 }
-#elif defined(__EMSCRIPTEN__)
+#elif defined(__EMSCRIPTEN__) || defined(__SWITCH__)
 
-/* Web: no faults. Every guest 8/16/32-bit access to the MCPX span
+/* Web and Switch: no (resumable) faults. Every guest 8/16/32-bit access to the MCPX span
  * (0xFE800000-0xFEFFFFFF) arrives here from the checked accessors in
  * recomp_types.h; what no device owns is plain memory, as natively. */
 #include <unistd.h>
@@ -1311,6 +1311,12 @@ static void web_setup(void)
 }
 #endif
 
+#if defined(__SWITCH__)
+extern void ssx3_SwitchSetup(void);              /* src/switch/switch_main.c */
+extern int ssx3_SwitchRun(int (*fn)(void));
+static int switch_winmain(void) { return WinMain(NULL, NULL, NULL, 0); }
+#endif
+
 /* Console entry point (for debugging -- lets you see printf output) */
 int main(int argc, char **argv)
 {
@@ -1318,6 +1324,10 @@ int main(int argc, char **argv)
     (void)argv;
 #if defined(__EMSCRIPTEN__)
     web_setup();
+#endif
+#if defined(__SWITCH__)
+    ssx3_SwitchSetup();
+    return ssx3_SwitchRun(switch_winmain);
 #endif
 #ifdef _WIN32
     return WinMain(GetModuleHandle(NULL), NULL, GetCommandLineA(), SW_SHOW);

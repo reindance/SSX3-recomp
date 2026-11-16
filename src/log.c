@@ -561,6 +561,10 @@ int log_pump_start(void)
         SetStdHandle(STD_ERROR_HANDLE, (HANDLE)_get_osfhandle(_fileno(stderr)));
         setvbuf(stderr, NULL, _IONBF, 0);
     }
+#elif defined(__SWITCH__)
+    /* No pipes in Horizon's newlib: stderr is the log file on the SD card,
+     * written as it comes. */
+    return 0;
 #else
     {
         int p[2], dupfd;

@@ -12,7 +12,9 @@
 #include <intrin.h>
 #else
 #include <unistd.h>
+#if !defined(__SWITCH__)
 #include <sys/utsname.h>
+#endif
 extern char **environ;
 #if defined(__x86_64__) || defined(__i386__)
 #include <cpuid.h>
@@ -113,6 +115,13 @@ static void system_line(void)
     if (EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &dm))
         log_msg(LOG_INFO, "SYSTEM", "main monitor %lux%lu at %lu Hz, %d monitor(s)",
                 dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency, GetSystemMetrics(SM_CMONITORS));
+#elif defined(__SWITCH__)
+    /* Horizon: no uname or sysconf memory; the application's share of RAM is
+     * in the [SWITCH] start-up lines. */
+    snprintf(os, sizeof os, "Nintendo Switch (Horizon)");
+    snprintf(cpu, sizeof cpu, "4x Cortex-A57");
+    log_msg(LOG_INFO, "SYSTEM", "%s, %s", os, cpu);
+    (void)ram_gb;
 #else
     struct utsname u;
     long pages = sysconf(_SC_PHYS_PAGES), psz = sysconf(_SC_PAGE_SIZE);

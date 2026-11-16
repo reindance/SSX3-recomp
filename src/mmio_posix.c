@@ -14,7 +14,7 @@
  * address, so only the instruction's length is decoded from ModRM, not its
  * operand address.
  */
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__SWITCH__)   /* Switch: checked accesses, main.c */
 #define _GNU_SOURCE
 #include <signal.h>
 #include <ucontext.h>
