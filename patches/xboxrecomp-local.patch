@@ -1690,8 +1690,21 @@ index 0000000..45b6a74
 +    return (void *)(uintptr_t)(guest_base + g_xbox_pagemap[guest_base >> 20]);
 +}
 +#endif
+diff --git a/src/kernel/kernel.h b/src/kernel/kernel.h
+index b9a02bc..59537fb 100644
+--- a/src/kernel/kernel.h
++++ b/src/kernel/kernel.h
+@@ -558,6 +558,8 @@ typedef char  xbox_host_char;
+ const wchar_t *xbox_LastHostPath(void);
+ 
+ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size);
++/* POSIX: the size <dir>/PartitionN.img (N = 1-5) stands for, else 0. */
++unsigned long long xbox_partition_image_size(const char *host_path);
+ 
+ /* Optional: a project sets this to see the guest paths the kernel translates
+  * (for example to print who opened a file). NULL by default; called before the
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index c65ba43..79cb9fb 100644
+index c65ba43..40ba7aa 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
 @@ -26,6 +26,7 @@
@@ -2426,7 +2439,23 @@ index c65ba43..79cb9fb 100644
              fprintf(stderr, "  [READ] from=0x%08X ev=%08X apc=%08X @%lld want=%u got=%u st=0x%08X  %02X %02X %02X %02X\n",
                      g_xbox_kernel_caller, STACK_ARG(1), STACK_ARG(2),
                      (long long)off.QuadPart, length, got,
-@@ -4155,8 +4592,31 @@ static void bridge_KeQueryBasePriorityThread(void)
+@@ -3857,6 +4294,15 @@ static void bridge_NtDeviceIoControlFile(void)
+         size.QuadPart = 0;
+         if (h && h != INVALID_HANDLE_VALUE)
+             GetFileSizeEx(h, &size);
++#if defined(__SWITCH__)
++        /* The images grow as written (kernel_path.c): the partition's own
++         * size comes from the table. */
++        if (h && h != INVALID_HANDLE_VALUE) {
++            unsigned long long want = xbox_partition_image_size(w32_handle_path(h));
++            if ((unsigned long long)size.QuadPart < want)
++                size.QuadPart = (LONGLONG)want;
++        }
++#endif
+         BRIDGE_MEM32(out_va +  0) = 0;                       /* StartingOffset */
+         BRIDGE_MEM32(out_va +  4) = 0;
+         BRIDGE_MEM32(out_va +  8) = (uint32_t)size.LowPart;  /* PartitionLength */
+@@ -4155,8 +4601,31 @@ static void bridge_KeQueryBasePriorityThread(void)
          XBOX_TO_NATIVE(STACK_ARG(0)));
  }
  
@@ -2458,7 +2487,7 @@ index c65ba43..79cb9fb 100644
      g_eax = (uint32_t)xbox_KeSetBasePriorityThread(
          XBOX_TO_NATIVE(STACK_ARG(0)), (LONG)STACK_ARG(1));
  }
-@@ -4472,15 +4932,49 @@ static void bridge_KeWaitForMultipleObjects(void)
+@@ -4472,15 +4941,49 @@ static void bridge_KeWaitForMultipleObjects(void)
      }
      if (count > BRIDGE_MAXIMUM_WAIT_OBJECTS)
          count = BRIDGE_MAXIMUM_WAIT_OBJECTS;
@@ -2511,7 +2540,7 @@ index c65ba43..79cb9fb 100644
  }
  
  #undef BRIDGE_MAXIMUM_WAIT_OBJECTS
-@@ -6792,7 +7286,7 @@ static void bridge_IoAllocateIrp(void)
+@@ -6792,7 +7295,7 @@ static void bridge_IoAllocateIrp(void)
      (void)charge_quota;
      va = xbox_HeapAlloc(total, 16);
      if (va)
@@ -2520,7 +2549,7 @@ index c65ba43..79cb9fb 100644
      else
          fprintf(stderr, "  [KERNEL] IoAllocateIrp: %u bytes REFUSED\n", total);
      g_eax = va;
-@@ -7349,8 +7843,7 @@ static void bridge_KeSetPriorityProcess(void)
+@@ -7349,8 +7852,7 @@ static void bridge_KeSetPriorityProcess(void)
  /* --- KeSetPriorityThread (ordinal 148, 2 args = 8 bytes) --- */
  static void bridge_KeSetPriorityThread(void)
  {
@@ -2530,7 +2559,7 @@ index c65ba43..79cb9fb 100644
      g_eax = 0;
  }
  
-@@ -7424,7 +7917,7 @@ static void bridge_MmDbgAllocateMemory(void)
+@@ -7424,7 +7926,7 @@ static void bridge_MmDbgAllocateMemory(void)
      }
      va = xbox_HeapAlloc(size, 16);
      if (va)
@@ -2539,7 +2568,7 @@ index c65ba43..79cb9fb 100644
      g_eax = va;
  }
  
-@@ -9371,14 +9864,218 @@ static int guest_cpu_enabled(void)
+@@ -9371,14 +9873,218 @@ static int guest_cpu_enabled(void)
      return g_guest_cpu_on;
  }
  
@@ -2758,7 +2787,7 @@ index c65ba43..79cb9fb 100644
      }
  }
  
-@@ -9391,11 +10088,160 @@ void guest_cpu_part(void)
+@@ -9391,11 +10097,160 @@ void guest_cpu_part(void)
      t_guest_thread = 0;
  }
  
@@ -2920,7 +2949,7 @@ index c65ba43..79cb9fb 100644
      if (held) {                        /* let other guest threads run meanwhile */
          t_guest_held = 0;
          LeaveCriticalSection(&g_guest_cpu);
-@@ -9403,11 +10249,16 @@ static void kernel_thunk_dispatch(void)
+@@ -9403,11 +10258,16 @@ static void kernel_thunk_dispatch(void)
      t_dispatch_depth++;
      kernel_thunk_dispatch_body();
      t_dispatch_depth--;
@@ -2938,7 +2967,7 @@ index c65ba43..79cb9fb 100644
          t_guest_held = 1;
      }
      (void)held;
-@@ -9447,9 +10298,9 @@ static void kernel_thunk_dispatch_body(void)
+@@ -9447,9 +10307,9 @@ static void kernel_thunk_dispatch_body(void)
  
      {
          static DWORD last_summary_tick = 0;
@@ -2950,7 +2979,7 @@ index c65ba43..79cb9fb 100644
              fprintf(stderr, "  [KERNEL] summary: %lld total calls, latest ordinal %u (slot %d) esp=0x%08X\n",
                      g_kernel_call_count, ordinal, slot, g_esp);
              /* And which ones, ranked. "Latest" names whatever the sample
-@@ -9671,7 +10522,7 @@ void xbox_kernel_bridge_init(void)
+@@ -9671,7 +10531,7 @@ void xbox_kernel_bridge_init(void)
      /* The thunk table lives in .rdata which is marked PAGE_READONLY.
       * Temporarily make it writable so we can patch the ordinals. */
      VirtualProtect(
@@ -2959,7 +2988,7 @@ index c65ba43..79cb9fb 100644
          g_thunk_table_count * 4,
          PAGE_READWRITE,
          &old_protect
-@@ -9749,7 +10600,7 @@ void xbox_kernel_bridge_init(void)
+@@ -9749,7 +10609,7 @@ void xbox_kernel_bridge_init(void)
          DWORD scan_protect;
          uint32_t low = g_thunk_table_base - LOOKBEHIND * 4;
  
@@ -2968,7 +2997,7 @@ index c65ba43..79cb9fb 100644
                         LOOKBEHIND * 4, PAGE_READWRITE, &scan_protect);
  
          for (i = 1; i <= LOOKBEHIND; i++) {
-@@ -9778,13 +10629,13 @@ void xbox_kernel_bridge_init(void)
+@@ -9778,13 +10638,13 @@ void xbox_kernel_bridge_init(void)
                      va, g_slot_ordinals[slot], slot);
          }
  
@@ -2985,7 +3014,7 @@ index c65ba43..79cb9fb 100644
          old_protect,
          &old_protect
 diff --git a/src/kernel/kernel_file.c b/src/kernel/kernel_file.c
-index 42135e0..000ff1d 100644
+index 42135e0..7b96e69 100644
 --- a/src/kernel/kernel_file.c
 +++ b/src/kernel/kernel_file.c
 @@ -24,7 +24,11 @@
@@ -3067,7 +3096,30 @@ index 42135e0..000ff1d 100644
          if (IoStatusBlock) {
              IoStatusBlock->Status = STATUS_OBJECT_NAME_NOT_FOUND;
              IoStatusBlock->Information = 0;
-@@ -950,12 +987,22 @@ NTSTATUS __stdcall xbox_NtQueryInformationFile(
+@@ -870,6 +907,22 @@ NTSTATUS __stdcall xbox_NtReadFile(
+         lseek(fd, (off_t)ByteOffset->QuadPart, SEEK_SET);
+ 
+     ssize_t n = read(fd, Buffer, Length);
++#if defined(__SWITCH__)
++    /* A partition image reads as zeros past its written part, up to the
++     * partition's size, as a sparse file would (kernel_path.c). */
++    if (n >= 0 && (ULONG)n < Length) {
++        unsigned long long size = xbox_partition_image_size(w32_handle_path(FileHandle));
++        off_t end = lseek(fd, 0, SEEK_CUR);
++        if (size && end >= 0 && (unsigned long long)end < size) {
++            unsigned long long more = size - (unsigned long long)end;
++            if (more > Length - (ULONG)n)
++                more = Length - (ULONG)n;
++            memset((char *)Buffer + n, 0, (size_t)more);
++            lseek(fd, (off_t)more, SEEK_CUR);
++            n += (ssize_t)more;
++        }
++    }
++#endif
+     if (n < 0) {
+         XBOX_TRACE(XBOX_LOG_FILE, "NtReadFile(handle=%p) errno=%d", FileHandle, errno);
+         IoStatusBlock->Status = STATUS_UNSUCCESSFUL;
+@@ -950,12 +1003,22 @@ NTSTATUS __stdcall xbox_NtQueryInformationFile(
          return STATUS_INVALID_PARAMETER;
  
      int fd = w32_handle_fd(FileHandle);
@@ -3090,7 +3142,7 @@ index 42135e0..000ff1d 100644
              return STATUS_UNSUCCESSFUL;
      }
  
-@@ -1077,16 +1124,25 @@ NTSTATUS __stdcall xbox_NtQueryVolumeInformationFile(
+@@ -1077,16 +1140,25 @@ NTSTATUS __stdcall xbox_NtQueryVolumeInformationFile(
      switch (FsInformationClass) {
          case XboxFileFsSizeInformation: {
              PXBOX_FILE_FS_SIZE_INFORMATION info = (PXBOX_FILE_FS_SIZE_INFORMATION)FsInformation;
@@ -3117,7 +3169,7 @@ index 42135e0..000ff1d 100644
                  info->TotalAllocationUnits.QuadPart = total / cs;
                  info->AvailableAllocationUnits.QuadPart = avail / cs;
              } else {
-@@ -1340,3 +1396,28 @@ NTSTATUS __stdcall xbox_NtQuerySymbolicLinkObject(
+@@ -1340,3 +1412,28 @@ NTSTATUS __stdcall xbox_NtQuerySymbolicLinkObject(
          *ReturnedLength = (ULONG)strlen(target);
      return STATUS_SUCCESS;
  }
@@ -3253,7 +3305,7 @@ index 1ad4fff..7ba275f 100644
  }
  
 diff --git a/src/kernel/kernel_path.c b/src/kernel/kernel_path.c
-index caf6390..2fc5982 100644
+index caf6390..2673693 100644
 --- a/src/kernel/kernel_path.c
 +++ b/src/kernel/kernel_path.c
 @@ -156,6 +156,19 @@ static int resolve_symlink(const char* xbox_path, char* out, size_t out_size)
@@ -3339,7 +3391,7 @@ index caf6390..2fc5982 100644
  void xbox_path_init(const char* game_dir, const char* save_dir)
  {
      if (game_dir) {
-@@ -548,9 +585,192 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
+@@ -548,9 +585,225 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
      strip_trailing_slash(s_game_dir);
      strip_trailing_slash(s_save_dir);
  
@@ -3497,16 +3549,33 @@ index caf6390..2fc5982 100644
 + * from IOCTL_DISK_GET_PARTITION_INFO, which reports the image's size: with
 + * the device mapped to a directory that was 0, the format failed with
 + * ERROR_DISK_FULL and the title quit to the dashboard. */
++static const unsigned long long s_part_sectors[6] = {
++    0,             /* 0: whole disk, the table only */
++    0x00465400ull, /* 1: E: game and saves          */
++    0x000FA000ull, /* 2: C: system                  */
++    0x00177000ull, /* 3: X: cache                   */
++    0x00177000ull, /* 4: Y: cache                   */
++    0x00177000ull, /* 5: Z: cache                   */
++};
++
++/* The size a partition image stands for, from its name (<dir>/PartitionN.img,
++ * N = 1-5), else 0. On the Switch the images are not that size on disk
++ * (below); the disk IOCTL and reads past the written part use this. */
++unsigned long long xbox_partition_image_size(const char *host_path)
++{
++    const char *base = host_path ? strrchr(host_path, '/') : NULL;
++    int p;
++    if (!base || strncasecmp(base + 1, "Partition", 9) != 0)
++        return 0;
++    p = base[10] - '0';
++    if (p < 1 || p > 5 || strcasecmp(base + 11, ".img") != 0)
++        return 0;
++    return s_part_sectors[p] * 512ull;
++}
++
 +static void xbox_create_partition_images(void)
 +{
-+    static const unsigned long long part_sectors[6] = {
-+        0,             /* 0: whole disk, the table only */
-+        0x00465400ull, /* 1: E: game and saves          */
-+        0x000FA000ull, /* 2: C: system                  */
-+        0x00177000ull, /* 3: X: cache                   */
-+        0x00177000ull, /* 4: Y: cache                   */
-+        0x00177000ull, /* 5: Z: cache                   */
-+    };
++    const unsigned long long *part_sectors = s_part_sectors;
 +    char image[MAX_PATH];
 +    struct stat st;
 +
@@ -3518,6 +3587,22 @@ index caf6390..2fc5982 100644
 +        int fd;
 +
 +        snprintf(image, sizeof(image), "%s/Partition%d.img", s_save_dir, p);
++#if defined(__SWITCH__)
++        /* FAT/exFAT has no sparse files: sizing these would allocate ~4.8 GB
++         * of SD card. They start empty and grow as the title writes; their
++         * size is reported from xbox_partition_image_size, and reads past
++         * the written part return zeros (kernel_file.c), as a sparse file
++         * does elsewhere. */
++        (void)want;
++        if (stat(image, &st) == 0)
++            continue;
++        fd = open(image, O_WRONLY | O_CREAT, 0644);
++        if (fd >= 0)
++            close(fd);
++        else
++            xbox_log(XBOX_LOG_WARN, XBOX_LOG_PATH, "%s: %s", image, strerror(errno));
++        continue;
++#endif
 +        if (stat(image, &st) == 0 && st.st_size == want)
 +            continue;
 +        fd = open(image, O_WRONLY | O_CREAT, 0644);
@@ -3532,7 +3617,7 @@ index caf6390..2fc5982 100644
  }
  
  BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size)
-@@ -566,6 +786,9 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+@@ -566,6 +819,9 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
      if (!s_initialized)
          xbox_path_init(NULL, NULL);
  
@@ -3542,7 +3627,7 @@ index caf6390..2fc5982 100644
      {
          char linked[512];
          if (resolve_symlink(xbox_path, linked, sizeof(linked)))
-@@ -577,6 +800,8 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+@@ -577,6 +833,8 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
          if (skip) {
              remainder = xbox_path + skip;
              base_dir  = s_rules[i].to_save ? s_save_dir : s_game_dir;
@@ -3551,7 +3636,7 @@ index caf6390..2fc5982 100644
              sub_dir   = s_rules[i].sub_posix;
              goto translate;
          }
-@@ -616,6 +841,7 @@ translate:
+@@ -616,6 +874,7 @@ translate:
                  host_path_buf[--n] = '\0';
          }
  

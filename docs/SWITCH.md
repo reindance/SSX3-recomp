@@ -39,10 +39,15 @@ On the SD card:
 Start from hbmenu in title mode (hold R while starting a game).
 
 Next: run on hardware (memory layout, input, audio, speed of the CPU side
-with `RECOMP_GPU=sw`), then the deko3d backend. Known gaps: the emulated hard
-disk's partition images are created at full size (~4.8 GB; sparse files do
-not exist on the SD card's FAT/exFAT), and phantom controller slots (SDL
-reports 4 pads in the emulator; Tricky filters them by Npad style).
+with `RECOMP_GPU=sw`), then the deko3d backend. The emulated hard disk's partition
+images start empty and grow as written (FAT/exFAT has no sparse files; the
+full sizes would take ~4.8 GB of SD card): the disk IOCTL reports the size
+from the partition table and reads past the written part return zeros. A
+fresh disk boots to the title (the Z: cache format writes ~116 KB).
+
+Known gaps: phantom controller slots (SDL reports 4 pads in the emulator;
+Tricky filters them by Npad style), and an intermittent hang in the boot
+state (1 of 5 emulator boots so far; guest threads all waiting).
 
 ## What already carries over
 
