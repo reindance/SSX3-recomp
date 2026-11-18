@@ -8726,10 +8726,10 @@ index 18291d7..0a80ebb 100644
   * XInput pad n and by pad-script steps prefixed "p<n+1>-". */
  #define USB_GAMEPAD_MAX 4
 diff --git a/src/video/CMakeLists.txt b/src/video/CMakeLists.txt
-index 2189a3b..f93df95 100644
+index 2189a3b..6da3605 100644
 --- a/src/video/CMakeLists.txt
 +++ b/src/video/CMakeLists.txt
-@@ -3,12 +3,25 @@ add_library(xbox_video STATIC
+@@ -3,12 +3,28 @@ add_library(xbox_video STATIC
      video_player.c
      video_pump.c
      fb_present.c
@@ -8744,6 +8744,9 @@ index 2189a3b..f93df95 100644
 +    target_link_libraries(xbox_video PRIVATE SDL2::SDL2)
 +    if(NINTENDO_SWITCH)   # <SDL2/SDL.h>: SDL2::SDL2 only names include/SDL2
 +        target_include_directories(xbox_video PRIVATE ${DEVKITPRO}/portlibs/switch/include)
++        # the display through deko3d, not SDL's OpenGL (nx_present.c)
++        target_sources(xbox_video PRIVATE nx_present.c)
++        target_link_libraries(xbox_video PUBLIC deko3d)
 +    endif()
 +    target_sources(xbox_video PRIVATE fb_present_sdl.c)
 +endif()
@@ -9713,10 +9716,10 @@ index 08bae4b..b52ae02 100644
  #endif
 diff --git a/src/video/fb_present_sdl.c b/src/video/fb_present_sdl.c
 new file mode 100644
-index 0000000..98301cb
+index 0000000..7e5a037
 --- /dev/null
 +++ b/src/video/fb_present_sdl.c
-@@ -0,0 +1,503 @@
+@@ -0,0 +1,593 @@
 +/**
 + * POSIX counterpart of fb_present.c: show the guest framebuffer in an SDL2
 + * window. Same contract (RECOMP_FB_WINDOW, flip-time copy, BMP dump, snap
@@ -10041,6 +10044,92 @@ index 0000000..98301cb
 +    s_dump_quiet = 0;
 +}
 +
++#if defined(__SWITCH__)
++#include "nx_present.h"
++
++/* Switch: the same frame hand-off as fb_thread below, shown through deko3d
++ * (nx_present.c) instead of an SDL window and renderer. SDL is only pumped
++ * for its controller events. */
++static void *fb_thread_nx(void *unused)
++{
++    uint32_t *hi_rgb = NULL, hi_w = 0, hi_h = 0;
++    int shown_hi = 0;
++
++    (void)unused;
++    if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0)
++        fprintf(stderr, "  [FBWIN] SDL controller init failed: %s\n", SDL_GetError());
++    /* Switch SDL stops joystick updates while text input is active (and
++     * shows the on-screen keyboard). From the SSX Tricky Switch port. */
++    SDL_StopTextInput();
++    if (!nx_present_init()) {
++        s_fb_running = 0;
++        return NULL;
++    }
++    __atomic_store_n(&s_client_w, 1280, __ATOMIC_RELAXED);
++    __atomic_store_n(&s_client_h, 720, __ATOMIC_RELAXED);
++    s_rgb = (uint32_t *)calloc((size_t)s_fb_width * s_fb_height, 4);
++    fprintf(stderr, "  [FBWIN] Switch display open (deko3d)\n");
++
++    while (s_fb_running) {
++        SDL_Event e;
++        int idx, fresh = 0;
++
++        while (SDL_PollEvent(&e))
++            if (e.type == SDL_QUIT) {
++                fflush(NULL);
++                _exit(0);
++            }
++        /* A renderer's full-resolution frame, while one is being published. */
++        pthread_mutex_lock(&s_hi_lock);
++        if (s_hi && now_ms() - s_hi_at < 250.0) {
++            if (s_hi_w != hi_w || s_hi_h != hi_h) {
++                free(hi_rgb);
++                hi_w = s_hi_w; hi_h = s_hi_h;
++                hi_rgb = (uint32_t *)malloc((size_t)hi_w * hi_h * 4);
++                s_hi_new = 1;
++            }
++            fresh = s_hi_new;
++            if (fresh && hi_rgb)
++                memcpy(hi_rgb, s_hi, (size_t)hi_w * hi_h * 4);
++            s_hi_new = 0;
++            pthread_mutex_unlock(&s_hi_lock);
++            if (hi_rgb) {
++                if (fresh || !shown_hi) {
++                    xbox_FramebufferApplyGamma(hi_rgb, (size_t)hi_w * hi_h);
++                    nx_present_frame(hi_rgb, hi_w, hi_h, hi_w, 0.0f);
++                    shown_hi = 1;
++                } else {
++                    usleep(2000);   /* nothing new: wait for the next frame */
++                }
++                snap_trigger_poll(hi_rgb, hi_w, hi_h);
++                continue;
++            }
++        } else {
++            pthread_mutex_unlock(&s_hi_lock);
++        }
++        shown_hi = 0;
++        idx = __atomic_load_n(&s_present_idx, __ATOMIC_ACQUIRE);
++        if (idx >= 0 && s_present[idx])
++            memcpy(s_rgb, s_present[idx], (size_t)s_fb_width * s_fb_height * 4);
++        else if (s_fb_va && s_fb_pitch) {
++            const uint8_t *src = (const uint8_t *)((uintptr_t)s_fb_va + xbox_GetMemoryOffset());
++            uint32_t y;
++            for (y = 0; y < s_fb_height; y++)
++                fb_convert_row(src + (size_t)y * s_fb_pitch,
++                               s_rgb + (size_t)y * s_fb_width,
++                               s_fb_pitch / s_fb_width);
++        }
++        xbox_FramebufferApplyGamma(s_rgb, (size_t)s_fb_width * s_fb_height);
++        /* Paced by the swapchain: acquiring an image waits for one. */
++        nx_present_frame(s_rgb, s_fb_width, s_fb_height, s_fb_width, 0.0f);
++        snap_trigger_poll(NULL, 0, 0);
++    }
++    free(hi_rgb);
++    nx_present_shutdown();
++    return NULL;
++}
++#endif
++
 +static void *fb_thread(void *unused)
 +{
 +    SDL_Window *win;
@@ -10208,7 +10297,11 @@ index 0000000..98301cb
 +        return;
 +    if (__sync_val_compare_and_swap(&s_fb_running, 0, 1) != 0)
 +        return;
++#if defined(__SWITCH__)
++    if (pthread_create(&th, NULL, fb_thread_nx, NULL) == 0)
++#else
 +    if (pthread_create(&th, NULL, fb_thread, NULL) == 0)
++#endif
 +        pthread_detach(th);
 +    else
 +        s_fb_running = 0;
@@ -11025,6 +11118,260 @@ index 0000000..8891786
 +int  gpu_present_active(void);
 +void gpu_present_capture(const char *path);   /* next presented image -> BMP */
 +void gpu_present_shutdown(void);
++#endif
++#endif
+diff --git a/src/video/nx_present.c b/src/video/nx_present.c
+new file mode 100644
+index 0000000..c7b29c6
+--- /dev/null
++++ b/src/video/nx_present.c
+@@ -0,0 +1,225 @@
++/*
++ * Nintendo Switch presenter (deko3d): shows a frame of guest ARGB8888 pixels
++ * on the display, scaled to fit and letterboxed. fb_present_sdl.c's window
++ * thread calls it on the Switch instead of an SDL window and renderer, so SDL
++ * is left with controllers and audio and its OpenGL (Switch Mesa) never
++ * shares the GPU with deko3d.
++ *
++ * One frame: the pixels go into a staging buffer, are copied into a source
++ * image of their own size, and the 2D engine blits that, filtered, into the
++ * acquired swapchain image (cleared black first, for the bars). The
++ * swapchain is 1280x720; docked output is scaled by the system.
++ *
++ * Owns the process's deko3d device; nx_present_device() hands it to a
++ * renderer backend so there is one.
++ *
++ * After the SSX Tricky Switch port's deko_present.c (640x480 only, no
++ * scaling), which was checked on hardware.
++ */
++#if defined(__SWITCH__)
++#include "nx_present.h"
++
++#include <deko3d.h>
++#include <switch.h>
++#include <stdio.h>
++#include <string.h>
++
++enum { OUT_W = 1280, OUT_H = 720, NIMG = 3, CMD_BYTES = 64 * 1024 };
++
++static DkDevice   s_dev;
++static DkQueue    s_queue;
++static DkCmdBuf   s_cmd;
++static DkSwapchain s_swap;
++static DkMemBlock s_cmd_mem, s_out_mem, s_src_mem, s_staging;
++static DkImage    s_out[NIMG];
++static DkImage    s_src;
++static uint32_t   s_src_w, s_src_h, s_staging_bytes;
++static uint64_t   s_frames;
++
++static uint32_t align_up(uint32_t n, uint32_t a) { return (n + a - 1) & ~(a - 1); }
++
++static DkMemBlock mem_block(uint32_t bytes, uint32_t flags)
++{
++    DkMemBlockMaker m;
++    dkMemBlockMakerDefaults(&m, s_dev, align_up(bytes, DK_MEMBLOCK_ALIGNMENT));
++    m.flags = flags;
++    return dkMemBlockCreate(&m);
++}
++
++static void dk_debug(void *user, const char *context, DkResult result, const char *message)
++{
++    (void)user;
++    fprintf(stderr, "[DEKO] %s: error %u: %s\n", context, (unsigned)result,
++            message ? message : "");
++}
++
++DkDevice nx_present_device(void)
++{
++    return s_dev;
++}
++
++void nx_present_shutdown(void)
++{
++    if (s_queue)
++        dkQueueWaitIdle(s_queue);
++    if (s_swap) dkSwapchainDestroy(s_swap);
++    if (s_cmd) dkCmdBufDestroy(s_cmd);
++    if (s_queue) dkQueueDestroy(s_queue);
++    if (s_cmd_mem) dkMemBlockDestroy(s_cmd_mem);
++    if (s_staging) dkMemBlockDestroy(s_staging);
++    if (s_src_mem) dkMemBlockDestroy(s_src_mem);
++    if (s_out_mem) dkMemBlockDestroy(s_out_mem);
++    if (s_dev) dkDeviceDestroy(s_dev);
++    s_swap = NULL; s_cmd = NULL; s_queue = NULL; s_dev = NULL;
++    s_cmd_mem = s_staging = s_src_mem = s_out_mem = NULL;
++    s_src_w = s_src_h = s_staging_bytes = 0;
++}
++
++int nx_present_init(void)
++{
++    DkDeviceMaker dm;
++    DkQueueMaker qm;
++    DkCmdBufMaker cm;
++    DkImageLayoutMaker lm;
++    DkImageLayout layout;
++    DkSwapchainMaker sm;
++    const DkImage *imgs[NIMG];
++    uint32_t stride;
++
++    if (s_swap)
++        return 1;
++    dkDeviceMakerDefaults(&dm);
++    dm.cbDebug = dk_debug;
++    if (!(s_dev = dkDeviceCreate(&dm)))
++        goto fail;
++    dkQueueMakerDefaults(&qm, s_dev);
++    qm.flags = DkQueueFlags_Graphics;
++    if (!(s_queue = dkQueueCreate(&qm)))
++        goto fail;
++    dkCmdBufMakerDefaults(&cm, s_dev);
++    if (!(s_cmd = dkCmdBufCreate(&cm)))
++        goto fail;
++    if (!(s_cmd_mem = mem_block(CMD_BYTES, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)))
++        goto fail;
++    dkCmdBufAddMemory(s_cmd, s_cmd_mem, 0, CMD_BYTES);   /* reused every frame */
++
++    dkImageLayoutMakerDefaults(&lm, s_dev);
++    lm.flags = DkImageFlags_UsagePresent | DkImageFlags_UsageRender | DkImageFlags_Usage2DEngine;
++    lm.format = DkImageFormat_BGRA8_Unorm;
++    lm.dimensions[0] = OUT_W;
++    lm.dimensions[1] = OUT_H;
++    dkImageLayoutInitialize(&layout, &lm);
++    stride = align_up((uint32_t)dkImageLayoutGetSize(&layout), dkImageLayoutGetAlignment(&layout));
++    if (!(s_out_mem = mem_block(stride * NIMG, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)))
++        goto fail;
++    for (int i = 0; i < NIMG; i++) {
++        dkImageInitialize(&s_out[i], &layout, s_out_mem, (uint32_t)i * stride);
++        imgs[i] = &s_out[i];
++    }
++    dkSwapchainMakerDefaults(&sm, s_dev, nwindowGetDefault(), imgs, NIMG);
++    if (!(s_swap = dkSwapchainCreate(&sm)))
++        goto fail;
++    fprintf(stderr, "[DEKO] presenter ready: %ux%u, %d images\n", OUT_W, OUT_H, NIMG);
++    return 1;
++fail:
++    fprintf(stderr, "[DEKO] presenter setup failed\n");
++    nx_present_shutdown();
++    return 0;
++}
++
++/* The source image and staging buffer for frames of w x h. Queue idle. */
++static int ensure_source(uint32_t w, uint32_t h)
++{
++    DkImageLayoutMaker lm;
++    DkImageLayout layout;
++    uint32_t bytes = w * h * 4;
++
++    if (w == s_src_w && h == s_src_h)
++        return 1;
++    dkQueueWaitIdle(s_queue);
++    if (s_src_mem) { dkMemBlockDestroy(s_src_mem); s_src_mem = NULL; }
++    dkImageLayoutMakerDefaults(&lm, s_dev);
++    lm.flags = DkImageFlags_Usage2DEngine;
++    lm.format = DkImageFormat_BGRA8_Unorm;
++    lm.dimensions[0] = w;
++    lm.dimensions[1] = h;
++    dkImageLayoutInitialize(&layout, &lm);
++    s_src_mem = mem_block(align_up((uint32_t)dkImageLayoutGetSize(&layout),
++                                   dkImageLayoutGetAlignment(&layout)),
++                          DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image);
++    if (!s_src_mem)
++        return 0;
++    dkImageInitialize(&s_src, &layout, s_src_mem, 0);
++    if (bytes > s_staging_bytes) {
++        if (s_staging) dkMemBlockDestroy(s_staging);
++        s_staging = mem_block(bytes, DkMemBlockFlags_CpuCached | DkMemBlockFlags_GpuCached);
++        s_staging_bytes = s_staging ? bytes : 0;
++        if (!s_staging)
++            return 0;
++    }
++    s_src_w = w;
++    s_src_h = h;
++    fprintf(stderr, "[DEKO] presenting %ux%u frames\n", w, h);
++    return 1;
++}
++
++int nx_present_frame(const uint32_t *argb, uint32_t w, uint32_t h, uint32_t pitch_px,
++                     float aspect)
++{
++    DkImageView src_view, dst_view;
++    DkImageRect src_rect, dst_rect;
++    DkCopyBuf copy;
++    DkScissor sc = { 0, 0, OUT_W, OUT_H };
++    uint32_t dw, dh, y;
++    uint8_t *stage;
++    int slot;
++
++    if (!s_swap || !argb || !w || !h || !ensure_source(w, h))
++        return 0;
++    /* The previous frame's commands finished before it returned. */
++    stage = (uint8_t *)dkMemBlockGetCpuAddr(s_staging);
++    for (y = 0; y < h; y++)
++        memcpy(stage + (size_t)y * w * 4, argb + (size_t)y * pitch_px, (size_t)w * 4);
++    dkMemBlockFlushCpuCache(s_staging, 0, w * h * 4);
++
++    /* Fit the picture's shape (aspect, or w/h) into the screen. */
++    if (aspect <= 0.0f)
++        aspect = (float)w / (float)h;
++    dh = OUT_H;
++    dw = (uint32_t)((float)OUT_H * aspect + 0.5f);
++    if (dw > OUT_W) {
++        dw = OUT_W;
++        dh = (uint32_t)((float)OUT_W / aspect + 0.5f);
++    }
++
++    slot = dkQueueAcquireImage(s_queue, s_swap);
++    if (slot < 0 || slot >= NIMG)
++        return 0;
++    dkCmdBufClear(s_cmd);
++    dkImageViewDefaults(&src_view, &s_src);
++    dkImageViewDefaults(&dst_view, &s_out[slot]);
++    copy.addr = dkMemBlockGetGpuAddr(s_staging);
++    copy.rowLength = w * 4;
++    copy.imageHeight = h;
++    src_rect = (DkImageRect){ 0, 0, 0, w, h, 1 };
++    dkCmdBufCopyBufferToImage(s_cmd, &copy, &src_view, &src_rect, 0);
++    dkCmdBufBindRenderTarget(s_cmd, &dst_view, NULL);
++    dkCmdBufSetScissors(s_cmd, 0, &sc, 1);
++    dkCmdBufClearColorFloat(s_cmd, 0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
++    dkCmdBufBarrier(s_cmd, DkBarrier_Full, DkInvalidateFlags_L2Cache);
++    dst_rect = (DkImageRect){ (OUT_W - dw) / 2, (OUT_H - dh) / 2, 0, dw, dh, 1 };
++    dkCmdBufBlitImage(s_cmd, &src_view, &src_rect, &dst_view, &dst_rect,
++                      DkBlitFlag_FilterLinear, 0);
++    dkCmdBufBarrier(s_cmd, DkBarrier_Full, DkInvalidateFlags_L2Cache);
++    dkQueueSubmitCommands(s_queue, dkCmdBufFinishList(s_cmd));
++    dkQueuePresentImage(s_queue, s_swap, slot);
++    dkQueueWaitIdle(s_queue);
++    if (dkQueueIsInErrorState(s_queue)) {
++        fprintf(stderr, "[DEKO] presenter queue in error state\n");
++        return 0;
++    }
++    if (++s_frames == 1)
++        fprintf(stderr, "[DEKO] first frame presented (%ux%u -> %ux%u)\n", w, h, dw, dh);
++    return 1;
++}
++#endif
+diff --git a/src/video/nx_present.h b/src/video/nx_present.h
+new file mode 100644
+index 0000000..b630371
+--- /dev/null
++++ b/src/video/nx_present.h
+@@ -0,0 +1,17 @@
++/* Nintendo Switch presenter (deko3d), nx_present.c. Window thread only. */
++#ifndef XBOXRECOMP_NX_PRESENT_H
++#define XBOXRECOMP_NX_PRESENT_H
++#if defined(__SWITCH__)
++#include <stdint.h>
++#include <deko3d.h>
++
++int  nx_present_init(void);
++void nx_present_shutdown(void);
++/* argb: w x h guest ARGB8888 pixels, rows pitch_px apart. aspect: the shape
++ * to show it at (0 = w/h). 0 on failure. */
++int  nx_present_frame(const uint32_t *argb, uint32_t w, uint32_t h, uint32_t pitch_px,
++                      float aspect);
++/* The process's deko3d device (NULL before nx_present_init). */
++DkDevice nx_present_device(void);
 +#endif
 +#endif
 diff --git a/src/video/video_player.h b/src/video/video_player.h
