@@ -49,6 +49,25 @@ Known gaps: phantom controller slots (SDL reports 4 pads in the emulator;
 Tricky filters them by Npad style), and an intermittent hang in the boot
 state (1 of 5 emulator boots so far; guest threads all waiting).
 
+### deko3d renderer (18 Nov 2026)
+
+`src/nx/dkr.c` implements `src/vk/vkr.h` on deko3d, so `vkr_backend.c`
+drives it as it drives Vulkan. The shaders are the Vulkan build's, turned
+into deko3d GLSL at build time (`src/nx/deko_shader.cmake`) and compiled
+offline by `uam`; the combiners are interpreted per pixel (no
+specialization). It is the default on the Switch (`RECOMP_GPU=sw` = the
+software rasteriser). The picture goes to the display through
+`video/nx_present.c` (toolkit), a 1280x720 deko3d swapchain.
+
+In Ryujinx: boot -> title in 15 s (75 s in software), the menus at ~50 FPS,
+`RECOMP_AUTONAV=race` into a Snow Jam race that renders correctly (gate,
+riders, trails, sky, HUD) at 11-25 FPS -- emulator numbers, not hardware.
+
+Not yet: offscreen targets (rider shadow maps are drawn in software and
+uploaded), BC7/HD textures, mip chains, MSAA, the scene (motion blur) and
+CRT passes, point sprites' coordinates (untested), internal resolution above
+480p.
+
 ## What already carries over
 
 - **arm64.** The Asahi build already compiles the lifted C and toolkit for

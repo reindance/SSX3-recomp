@@ -277,6 +277,9 @@ static void record_frame(const uint8_t *px, uint32_t w, uint32_t h)
                  " -pix_fmt yuv420p \"%s\"", w, h, path);
 #ifdef _WIN32
         pipe = _popen(cmd, "wb");
+#elif defined(__SWITCH__)
+        pipe = NULL;                    /* no processes: no recording */
+        fprintf(stderr, "[VKR] RECOMP_RECORD is not available on the Switch\n");
 #else
         pipe = popen(cmd, "w");
 #endif

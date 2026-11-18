@@ -107,9 +107,8 @@ void ssx3_SwitchSetup(void)
     setenv("RECOMP_GAME_DIR", NX_DIR "/game", 0);
     setenv("RECOMP_SAVE_DIR", NX_DIR "/saves", 0);
     setenv("RECOMP_SYSTEM_DIR", NX_DIR "/system", 0);
-    /* No renderer backend yet: the toolkit's software rasteriser at the
-     * original 640x480 4:3 (a widened camera would be squeezed). */
-    setenv("RECOMP_GPU", "sw", 0);
+    /* The deko3d renderer (src/nx/dkr.c; RECOMP_GPU=sw = the software
+     * rasteriser) at the original 640x480 4:3 for now. */
     setenv("RECOMP_RES", "480", 0);
     setenv("RECOMP_WIDESCREEN", "0", 0);
 

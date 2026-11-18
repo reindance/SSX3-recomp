@@ -189,6 +189,39 @@ if(EMSCRIPTEN)
     target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vk ${XBOXRECOMP_DIR}/src/kernel)
     target_compile_definitions(${PROJECT_NAME} PRIVATE SSX3_VULKAN=1)
+elseif(NINTENDO_SWITCH)
+    # The same renderer interface on deko3d (src/nx/dkr.c). The Vulkan GLSL
+    # becomes deko3d GLSL (src/nx/deko_shader.cmake), is compiled offline by
+    # uam and embedded.
+    set(DKR_GEN "${CMAKE_BINARY_DIR}/dkr_gen")
+    file(MAKE_DIRECTORY "${DKR_GEN}")
+    set(DKR_HEADERS "")
+    function(dkr_shader stage src name)
+        set(glsl "${DKR_GEN}/${name}.glsl")
+        set(dksh "${DKR_GEN}/${name}.dksh")
+        set(hdr "${DKR_GEN}/${name}_dksh.h")
+        add_custom_command(
+            OUTPUT "${hdr}"
+            COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/src/vk/shaders/${src}
+                    -DOUT=${glsl} "-DDEFS=${ARGN}" -P ${CMAKE_SOURCE_DIR}/src/nx/deko_shader.cmake
+            COMMAND ${NX_UAM_EXE} -s ${stage} -o ${dksh} ${glsl}
+            COMMAND ${CMAKE_COMMAND} -DIN=${dksh} -DOUT=${hdr} -DNAME=${name}_dksh
+                    -P ${CMAKE_SOURCE_DIR}/src/vk/embed_spv.cmake
+            DEPENDS ${CMAKE_SOURCE_DIR}/src/vk/shaders/${src} ${CMAKE_SOURCE_DIR}/src/nx/deko_shader.cmake
+            VERBATIM)
+        set(DKR_HEADERS ${DKR_HEADERS} "${hdr}" PARENT_SCOPE)
+    endfunction()
+    dkr_shader(vert xbox.vert xbox_vert)
+    dkr_shader(vert xbox_vsh.vert xbox_vsh_vert)
+    dkr_shader(frag xbox.frag xbox_frag)
+    dkr_shader(frag xbox.frag xbox_frag_wdepth W_DEPTH)
+    add_custom_target(dkr_shaders DEPENDS ${DKR_HEADERS})
+    add_dependencies(${PROJECT_NAME} dkr_shaders)
+    target_sources(${PROJECT_NAME} PRIVATE src/vk/vkr_backend.c src/vk/vkr_hdtex.c src/nx/dkr.c)
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vk ${XBOXRECOMP_DIR}/src/kernel ${DKR_GEN})
+    target_compile_definitions(${PROJECT_NAME} PRIVATE SSX3_VULKAN=1)
+    target_link_libraries(${PROJECT_NAME} PRIVATE deko3d)
 elseif(SSX3_VULKAN)
     add_subdirectory(src/vk ${CMAKE_BINARY_DIR}/vk)
     target_sources(${PROJECT_NAME} PRIVATE src/vk/vkr_backend.c src/vk/vkr_hdtex.c)
